@@ -82,6 +82,22 @@ jobs:
           fi
           echo "Debug keystore ready."
 
+      - name: Configure AndroidX in gradle.properties
+        run: |
+          echo "=== Ensuring gradle.properties has AndroidX enabled ==="
+          touch gradle.properties
+          if ! grep -q "android.useAndroidX" gradle.properties; then
+            echo "android.useAndroidX=true" >> gradle.properties
+          fi
+          if ! grep -q "android.enableJetifier" gradle.properties; then
+            echo "android.enableJetifier=true" >> gradle.properties
+          fi
+          if ! grep -q "org.gradle.jvmargs" gradle.properties; then
+            echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          fi
+          echo "=== gradle.properties content ==="
+          cat gradle.properties
+
       - name: Build debug APK
         run: |
           gradle :app:assembleDebug --stacktrace --no-daemon
