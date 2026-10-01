@@ -40,6 +40,21 @@ jobs:
           fi
           echo "Java 17 environment verified successfully."
 
+      - name: Verify Android Gradle project structure
+        run: |
+          echo "=== Checking Android Project Structure ==="
+          if [ ! -f "settings.gradle.kts" ] && [ ! -f "settings.gradle" ]; then
+            echo "::error:: settings.gradle(.kts) not found in repository root!"
+            echo "The Android project files are currently only defined inside src/services/androidProjectFiles.ts."
+            echo "Actual Android project files (settings.gradle.kts, app/build.gradle.kts, etc.) must be committed to the repository before Gradle can build."
+            exit 1
+          fi
+          if [ ! -d "app" ] || [ ! -f "app/build.gradle.kts" ]; then
+            echo "::error:: Android 'app' module not found!"
+            exit 1
+          fi
+          echo "Android Gradle project files verified successfully."
+
       - name: Set up Gradle 8.7 (Compatible with AGP 8.3.0)
         uses: gradle/actions/setup-gradle@v3
         with:
