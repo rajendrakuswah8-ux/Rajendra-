@@ -80,6 +80,19 @@ include(":app")
 `,
   },
   {
+    path: 'gradle.properties',
+    language: 'properties',
+    description: 'Project-wide Gradle and AndroidX settings',
+    content: `# Enable AndroidX support libraries
+android.useAndroidX=true
+android.enableJetifier=true
+
+# Memory and encoding settings for Gradle
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+kotlin.code.style=official
+`,
+  },
+  {
     path: 'gradle/wrapper/gradle-wrapper.properties',
     language: 'properties',
     description: 'Gradle wrapper distribution properties',
