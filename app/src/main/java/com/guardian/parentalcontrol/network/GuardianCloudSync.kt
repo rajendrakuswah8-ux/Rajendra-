@@ -81,14 +81,16 @@ object GuardianCloudSync {
         }
     }
 
-    // Child sends heartbeat/status to Parent
-    suspend fun sendChildHeartbeat(
+    // Child sends full telemetry, live permissions, and GPS location to Parent
+    suspend fun sendChildTelemetry(
         guardianId: String,
         deviceId: String,
         deviceName: String,
         batteryLevel: Int,
         isOnline: Boolean,
-        permissions: Map<String, String>
+        permissions: JSONObject,
+        location: JSONObject?,
+        lastCommandResponse: JSONObject? = null
     ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
@@ -107,9 +109,9 @@ object GuardianCloudSync {
                     put("batteryLevel", batteryLevel)
                     put("isOnline", isOnline)
                     put("lastSeen", System.currentTimeMillis())
-                    val permObj = JSONObject()
-                    permissions.forEach { (k, v) -> permObj.put(k, v) }
-                    put("permissions", permObj)
+                    put("permissions", permissions)
+                    if (location != null) put("location", location)
+                    if (lastCommandResponse != null) put("lastCommandResponse", lastCommandResponse)
                 }
 
                 OutputStreamWriter(conn.outputStream).use { writer ->
@@ -155,8 +157,14 @@ object GuardianCloudSync {
         }
     }
 
-    // Parent dispatches remote commands (SIREN_ON, FLASHLIGHT_ON, LOCK_DEVICE)
-    suspend fun sendRemoteCommand(deviceId: String, command: String): Boolean {
+    // Parent sends structured command to Child
+    suspend fun sendRemoteCommand(
+        deviceId: String,
+        commandType: String,
+        commandId: String = "cmd_" + System.currentTimeMillis() + "_" + (100..999).random(),
+        guardianId: String = "",
+        payload: JSONObject = JSONObject()
+    ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val url = URL("$BASE_NTFY/guardian_cmd_$deviceId")
@@ -167,13 +175,18 @@ object GuardianCloudSync {
                 conn.readTimeout = 8000
                 conn.setRequestProperty("Content-Type", "text/plain")
 
-                val payload = JSONObject().apply {
-                    put("command", command)
+                val cmdObj = JSONObject().apply {
+                    put("commandId", commandId)
+                    put("command", commandType)
+                    put("type", commandType)
+                    put("guardianId", guardianId)
+                    put("deviceId", deviceId)
+                    put("payload", payload)
                     put("timestamp", System.currentTimeMillis())
                 }
 
                 OutputStreamWriter(conn.outputStream).use { writer ->
-                    writer.write(payload.toString())
+                    writer.write(cmdObj.toString())
                     writer.flush()
                 }
 
@@ -185,10 +198,10 @@ object GuardianCloudSync {
         }
     }
 
-    // Child polls for remote commands
-    suspend fun pollRemoteCommands(deviceId: String): List<String> {
+    // Child polls for structured commands
+    suspend fun pollRemoteCommands(deviceId: String): List<JSONObject> {
         return withContext(Dispatchers.IO) {
-            val list = mutableListOf<String>()
+            val list = mutableListOf<JSONObject>()
             try {
                 val url = URL("$BASE_NTFY/guardian_cmd_$deviceId/json?poll=1")
                 val conn = url.openConnection() as HttpURLConnection
@@ -203,8 +216,7 @@ object GuardianCloudSync {
                             val eventObj = JSONObject(line)
                             if (eventObj.optString("event") == "message") {
                                 val msgObj = JSONObject(eventObj.optString("message"))
-                                val cmd = msgObj.optString("command")
-                                if (cmd.isNotBlank()) list.add(cmd)
+                                list.add(msgObj)
                             }
                         } catch (ignored: Exception) {}
                     }
