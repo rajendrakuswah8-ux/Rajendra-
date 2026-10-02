@@ -1,46 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
-    }
-
-    // Default catch-all
+    // Allow complete read/write access for all collections (pairingCodes, childDevices, guardians, deviceCommands)
     match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Guardian parent users
-    match /guardians/{userId} {
-      allow read, write: if true;
-    }
-
-    // Ephemeral pairing codes
-    match /pairingCodes/{codeId} {
-      allow read, write: if true;
-    }
-
-    // Child devices telemetry, presence and pairing
-    match /childDevices/{deviceId} {
-      allow read: if true;
-      allow create: if isValidId(deviceId)
-        && request.resource.data.childAuthUid is string
-        && request.resource.data.childAuthUid.size() > 0
-        && request.resource.data.guardianId is string
-        && request.resource.data.deviceId == deviceId;
-      allow update: if isValidId(deviceId)
-        && request.resource.data.deviceId == deviceId;
-      allow delete: if isValidId(deviceId);
-    }
-
-    // Remote Commands (Guardian sends -> Child consumes & responds)
-    match /deviceCommands/{commandId} {
-      allow read, write: if true;
-    }
-
-    // Device notification events
-    match /deviceEvents/{eventId} {
       allow read, write: if true;
     }
   }
