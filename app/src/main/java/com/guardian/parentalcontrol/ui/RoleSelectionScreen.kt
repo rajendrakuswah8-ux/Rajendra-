@@ -80,17 +80,22 @@ fun RoleSelectionScreen() {
     }
 
     fun sendParentCommand(commandType: String, parameters: Map<String, Any> = emptyMap()) {
-        val cmd = hashMapOf(
-            "id" to UUID.randomUUID().toString(),
-            "targetDeviceId" to deviceIdInput,
+        val cmdId = UUID.randomUUID().toString()
+        val ts = System.currentTimeMillis()
+
+        // 1. Primary write to deviceCommands (for ChildForegroundService)
+        val deviceCmd = hashMapOf(
+            "commandId" to cmdId,
+            "deviceId" to deviceIdInput,
             "guardianId" to "guardian_parent_01",
             "type" to commandType,
-            "parameters" to parameters,
             "status" to "PENDING",
-            "timestamp" to System.currentTimeMillis()
+            "payload" to parameters,
+            "createdAt" to ts.toString(),
+            "updatedAt" to ts.toString()
         )
-        firestore.collection("commands")
-            .add(cmd)
+        firestore.collection("deviceCommands").document(cmdId)
+            .set(deviceCmd)
             .addOnSuccessListener {
                 actionStatusMessage = "Command sent: $commandType"
                 Toast.makeText(context, "Command sent to $deviceIdInput: $commandType", Toast.LENGTH_SHORT).show()
@@ -99,6 +104,21 @@ fun RoleSelectionScreen() {
                 actionStatusMessage = "Failed: ${e.message}"
                 Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
+
+        // 2. Also write to commands collection for legacy compatibility
+        val legacyCmd = hashMapOf(
+            "id" to cmdId,
+            "commandId" to cmdId,
+            "targetDeviceId" to deviceIdInput,
+            "deviceId" to deviceIdInput,
+            "guardianId" to "guardian_parent_01",
+            "type" to commandType,
+            "parameters" to parameters,
+            "payload" to parameters,
+            "status" to "PENDING",
+            "timestamp" to ts
+        )
+        firestore.collection("commands").document(cmdId).set(legacyCmd)
     }
 
     fun updateParentPin(newPin: String) {
@@ -338,6 +358,37 @@ fun RoleSelectionScreen() {
                     }
 
                     Spacer(modifier = Modifier.height(20.dp))
+
+                                        // Helpful Guidance Card for Single Phone vs Two Phones
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(0xFFFFD54F), RoundedCornerShape(14.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF57F17), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Guardian काम कैसे करता है? (How to test)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = Color(0xFFE65100)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                "1. यह ऐप 2 फोन के लिए है: एक माता-पिता का (Parent) और दूसरा बच्चे का (Child)।\n2. बच्चे के फोन पर ऊपर 'Child Device' टैब में जाएं, PIN 147258 डालें और 'ACTIVATE CHILD PROTECTION' चालू करें।\n3. यदि इसी एक फोन पर टेस्ट करना है, तो पहले ऊपर 'Child Device' टैब में जाकर सुरक्षा चालू करें, फिर यहाँ सायरन/टॉर्च बटन दबाएं!",
+                                fontSize = 11.sp,
+                                color = Color(0xFF4E342E),
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
                         "REAL-TIME REMOTE CONTROLS",
