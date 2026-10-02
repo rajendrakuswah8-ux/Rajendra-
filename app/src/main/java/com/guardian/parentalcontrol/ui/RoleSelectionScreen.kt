@@ -6,8 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -16,12 +18,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -29,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.firestore.FirebaseFirestore
@@ -36,54 +42,87 @@ import com.guardian.parentalcontrol.service.ChildForegroundService
 import com.guardian.parentalcontrol.service.GuardianDeviceAdminReceiver
 import java.util.UUID
 
+// Exact visual styling colors from reference screenshots
+val BrandPurple = Color(0xFF6C47FF)
+val BrandPurpleDark = Color(0xFF5331E6)
+val BrandPurpleLight = Color(0xFFF3EFFF)
+val GradientHeaderStart = Color(0xFF7A4BFF)
+val GradientHeaderEnd = Color(0xFF9065FF)
+val CardBackground = Color(0xFFFFFFFF)
+val ScreenBackground = Color(0xFFF7F8FC)
+val TextTitleDark = Color(0xFF1E1E26)
+val TextSubDark = Color(0xFF6B6E7D)
+val AccentOrange = Color(0xFFFF7A00)
+val AccentYellow = Color(0xFFFFB800)
+val AccentCyan = Color(0xFF00C6FF)
+val AccentPink = Color(0xFFFF4081)
+val StatusGreen = Color(0xFF10B981)
+
+enum class AppScreen {
+    ROLE_CHOOSER,      // "Whose device is this?" - Screenshot 1
+    PARENT_DASHBOARD,  // Exact UI from Screenshot 2
+    KID_CONFIG         // Kid's Device background protection mode
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoleSelectionScreen() {
     val context = LocalContext.current
     val firestore = remember { FirebaseFirestore.getInstance() }
-    val scrollState = rememberScrollState()
-
     val dpm = remember { context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager }
     val adminComponent = remember { ComponentName(context, GuardianDeviceAdminReceiver::class.java) }
     val isAdminActive = remember { dpm.isAdminActive(adminComponent) }
 
-    var selectedTab by remember { mutableStateOf(0) } // 0 = Parent Dashboard, 1 = Child Mode
+    // Screen State
+    var currentScreen by remember { mutableStateOf(AppScreen.ROLE_CHOOSER) }
+    var selectedBottomTab by remember { mutableStateOf("Device") } // "Notice", "Device", "Me"
+
+    // Child Data State
+    var childName by remember { mutableStateOf("anushka") }
     var deviceIdInput by remember { mutableStateOf("child_phone_01") }
+    var childBattery by remember { mutableStateOf(74) }
+    var isChildOnline by remember { mutableStateOf(true) }
+    var parentSecretPin by remember { mutableStateOf("147258") }
+    var isBlockAllAppsActive by remember { mutableStateOf(false) }
+
+    // Child Service Running State
     var isChildServiceRunning by remember { mutableStateOf(false) }
     var actionStatusMessage by remember { mutableStateOf<String?>(null) }
-
-    // Parent PIN Security System
-    var parentSecretPin by remember { mutableStateOf("123456") }
-    var newPinInput by remember { mutableStateOf("") }
-    var isPinUnlocked by remember { mutableStateOf(false) }
+    var showPinDialog by remember { mutableStateOf(false) }
+    var pinDialogTarget by remember { mutableStateOf<AppScreen?>(null) }
     var enteredPin by remember { mutableStateOf("") }
     var pinError by remember { mutableStateOf<String?>(null) }
 
-    // Uninstall Dialog
-    var showUninstallDialog by remember { mutableStateOf(false) }
-    var uninstallPinInput by remember { mutableStateOf("") }
-    var uninstallError by remember { mutableStateOf<String?>(null) }
-
-    // Remote child state
-    var isTorchActive by remember { mutableStateOf(false) }
-    var isSirenActive by remember { mutableStateOf(false) }
-
-    // Fetch Security PIN from Firebase
+    // Real-time Firestore sync with child device
     LaunchedEffect(deviceIdInput) {
         firestore.collection("childDevices").document(deviceIdInput)
             .addSnapshotListener { snapshot, _ ->
-                val pin = snapshot?.getString("securityPin")
-                if (!pin.isNullOrBlank()) {
-                    parentSecretPin = pin
+                if (snapshot != null && snapshot.exists()) {
+                    val battery = snapshot.getLong("batteryLevel")?.toInt()
+                    if (battery != null) childBattery = battery
+
+                    val online = snapshot.getBoolean("isOnline") ?: false
+                    val lastSeen = snapshot.getLong("lastSeen") ?: 0L
+                    isChildOnline = online && (System.currentTimeMillis() - lastSeen < 60_000L)
+
+                    val pin = snapshot.getString("securityPin")
+                    if (!pin.isNullOrBlank()) parentSecretPin = pin
+
+                    val name = snapshot.getString("childName")
+                    if (!name.isNullOrBlank()) childName = name
+
+                    val blockApps = snapshot.getBoolean("blockAllApps") ?: false
+                    isBlockAllAppsActive = blockApps
                 }
             }
     }
 
+    // Command Dispatcher to Child Device
     fun sendParentCommand(commandType: String, parameters: Map<String, Any> = emptyMap()) {
         val cmdId = UUID.randomUUID().toString()
         val ts = System.currentTimeMillis()
 
-        // 1. Primary write to deviceCommands (for ChildForegroundService)
+        // 1. Primary write to deviceCommands
         val deviceCmd = hashMapOf(
             "commandId" to cmdId,
             "deviceId" to deviceIdInput,
@@ -98,14 +137,14 @@ fun RoleSelectionScreen() {
             .set(deviceCmd)
             .addOnSuccessListener {
                 actionStatusMessage = "Command sent: $commandType"
-                Toast.makeText(context, "Command sent to $deviceIdInput: $commandType", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "$commandType sent to $childName", Toast.LENGTH_SHORT).show()
             }
             .addOnFailureListener { e ->
                 actionStatusMessage = "Failed: ${e.message}"
                 Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
 
-        // 2. Also write to commands collection for legacy compatibility
+        // 2. Also write to commands collection for backwards compatibility
         val legacyCmd = hashMapOf(
             "id" to cmdId,
             "commandId" to cmdId,
@@ -121,730 +160,112 @@ fun RoleSelectionScreen() {
         firestore.collection("commands").document(cmdId).set(legacyCmd)
     }
 
-    fun updateParentPin(newPin: String) {
-        if (newPin.length < 4) {
-            Toast.makeText(context, "PIN must be at least 4 digits", Toast.LENGTH_SHORT).show()
-            return
+    // Render appropriate screen based on state
+    when (currentScreen) {
+        AppScreen.ROLE_CHOOSER -> {
+            RoleChooserScreen(
+                onSelectParents = { currentScreen = AppScreen.PARENT_DASHBOARD },
+                onSelectKids = { currentScreen = AppScreen.KID_CONFIG }
+            )
         }
-        parentSecretPin = newPin
-        firestore.collection("childDevices").document(deviceIdInput)
-            .update("securityPin", newPin)
-            .addOnSuccessListener {
-                Toast.makeText(context, "Parent Security PIN updated to $newPin!", Toast.LENGTH_LONG).show()
-                newPinInput = ""
-            }
-    }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = CircleShape,
-                            color = PurpleLight,
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Default.Security,
-                                    contentDescription = null,
-                                    tint = PurplePrimary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
+        AppScreen.PARENT_DASHBOARD -> {
+            ParentDashboardView(
+                childName = childName,
+                childBattery = childBattery,
+                isChildOnline = isChildOnline,
+                isBlockAllApps = isBlockAllAppsActive,
+                selectedTab = selectedBottomTab,
+                onTabSelect = { selectedBottomTab = it },
+                onSwitchRole = { currentScreen = AppScreen.ROLE_CHOOSER },
+                onSendCommand = { cmd, params -> sendParentCommand(cmd, params) },
+                onToggleBlockApps = { enable ->
+                    isBlockAllAppsActive = enable
+                    sendParentCommand(if (enable) "LOCK_DEVICE" else "UNLOCK_DEVICE")
+                    firestore.collection("childDevices").document(deviceIdInput)
+                        .update("blockAllApps", enable)
+                }
+            )
+        }
+
+        AppScreen.KID_CONFIG -> {
+            KidConfigScreen(
+                childName = childName,
+                deviceId = deviceIdInput,
+                parentPin = parentSecretPin,
+                isServiceRunning = isChildServiceRunning,
+                isAdminActive = isAdminActive,
+                onNameChange = { childName = it },
+                onDeviceIdChange = { deviceIdInput = it },
+                onToggleProtection = { shouldRun ->
+                    if (shouldRun) {
+                        val intent = Intent(context, ChildForegroundService::class.java).apply {
+                            putExtra("DEVICE_ID", deviceIdInput)
+                            putExtra("GUARDIAN_ID", "guardian_parent_01")
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                "GUARDIAN",
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 18.sp,
-                                color = PurplePrimary
-                            )
-                            Text(
-                                "PIN-Protected Parental Safety",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextMedium
-                            )
-                        }
+                        context.startForegroundService(intent)
+                        isChildServiceRunning = true
+                        Toast.makeText(context, "Child Protection Active 🟢", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val intent = Intent(context, ChildForegroundService::class.java)
+                        context.stopService(intent)
+                        isChildServiceRunning = false
+                        Toast.makeText(context, "Child Protection Stopped ⏸️", Toast.LENGTH_SHORT).show()
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = BackgroundWhite,
-                    titleContentColor = PurplePrimary
-                )
+                onExitToRoleChooser = {
+                    showPinDialog = true
+                    pinDialogTarget = AppScreen.ROLE_CHOOSER
+                }
             )
-        },
-        containerColor = BackgroundWhite
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .background(BackgroundWhite)
-        ) {
-            // Mode Selector Tabs (White & Purple)
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = BackgroundWhite,
-                contentColor = PurplePrimary,
-                indicator = { tabPositions ->
-                    TabRowDefaults.Indicator(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = PurplePrimary,
-                        height = 3.dp
-                    )
-                }
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.SupervisorAccount, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Parent Dashboard", fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Child Device", fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState)
-                    .padding(16.dp)
-            ) {
-                if (selectedTab == 0) {
-                    // ==========================================
-                    // PARENT DASHBOARD SCREEN (White & Purple)
-                    // ==========================================
-
-                    // Device Status Card
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = PurpleSurface),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, PurpleLight, RoundedCornerShape(16.dp))
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(10.dp)
-                                            .clip(CircleShape)
-                                            .background(OnlineGreen)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = deviceIdInput,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        color = TextDark
-                                    )
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFFE8F5E9)
-                                ) {
-                                    Text(
-                                        "LIVE PROTECTED",
-                                        color = Color(0xFF2E7D32),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                StatusItem(icon = Icons.Default.BatteryChargingFull, label = "Battery", value = "85%")
-                                StatusItem(icon = Icons.Default.LocationOn, label = "GPS", value = "Satellite Active")
-                                StatusItem(icon = Icons.Default.Lock, label = "PIN Lock", value = parentSecretPin)
-                                StatusItem(icon = Icons.Default.Shield, label = "Anti-Uninstall", value = "Armed")
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    // SECRET PARENT PIN & ANTI-UNINSTALL MANAGEMENT CARD
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = BackgroundWhite),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.5.dp, PurplePrimary.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = PurpleLight,
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(Icons.Default.VpnKey, contentDescription = null, tint = PurplePrimary, modifier = Modifier.size(20.dp))
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text("PARENT SECURITY PIN & UNINSTALL CODE", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = PurplePrimary)
-                                    Text("This code is required to open child app or uninstall it", fontSize = 11.sp, color = TextMedium)
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = PurpleSurface,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Active Security PIN:", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextDark)
-                                    Text(parentSecretPin, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = PurplePrimary, letterSpacing = 3.sp)
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedTextField(
-                                    value = newPinInput,
-                                    onValueChange = { if (it.length <= 6) newPinInput = it },
-                                    label = { Text("Set New PIN") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Button(
-                                    onClick = { updateParentPin(newPinInput) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("SAVE PIN")
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                                        // Helpful Guidance Card for Single Phone vs Two Phones
-                    Card(
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, Color(0xFFFFD54F), RoundedCornerShape(14.dp))
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF57F17), modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Guardian काम कैसे करता है? (How to test)",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFFE65100)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                "1. यह ऐप 2 फोन के लिए है: एक माता-पिता का (Parent) और दूसरा बच्चे का (Child)।\n2. बच्चे के फोन पर ऊपर 'Child Device' टैब में जाएं, PIN 147258 डालें और 'ACTIVATE CHILD PROTECTION' चालू करें।\n3. यदि इसी एक फोन पर टेस्ट करना है, तो पहले ऊपर 'Child Device' टैब में जाकर सुरक्षा चालू करें, फिर यहाँ सायरन/टॉर्च बटन दबाएं!",
-                                fontSize = 11.sp,
-                                color = Color(0xFF4E342E),
-                                lineHeight = 16.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        "REAL-TIME REMOTE CONTROLS",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = PurplePrimary,
-                        letterSpacing = 1.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // 2x2 Grid of Live Remote Actions
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        ControlActionButton(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Default.Videocam,
-                            title = "Camera + Audio",
-                            subtitle = "Front / Back + Sound",
-                            onClick = {
-                                sendParentCommand("START_CAMERA", mapOf("lens" to "back", "withAudio" to true))
-                            }
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        ControlActionButton(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Default.Mic,
-                            title = "Listen Audio",
-                            subtitle = "Surrounding sound",
-                            onClick = {
-                                sendParentCommand("START_AUDIO", mapOf("durationSeconds" to 30))
-                            }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        ControlActionButton(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Default.Lock,
-                            title = "Lock Phone",
-                            subtitle = "Immediate lock screen",
-                            onClick = {
-                                sendParentCommand("LOCK_DEVICE")
-                            }
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        ControlActionButton(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Default.VolumeUp,
-                            title = if (isSirenActive) "Stop Siren" else "Emergency Siren",
-                            subtitle = "Ring loud alarm",
-                            onClick = {
-                                isSirenActive = !isSirenActive
-                                sendParentCommand(if (isSirenActive) "SIREN_ON" else "SIREN_OFF")
-                            }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        ControlActionButton(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Default.FlashlightOn,
-                            title = if (isTorchActive) "Flashlight OFF" else "Flashlight ON",
-                            subtitle = "Remote torch toggle",
-                            onClick = {
-                                isTorchActive = !isTorchActive
-                                sendParentCommand(if (isTorchActive) "TORCH_ON" else "TORCH_OFF")
-                            }
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        ControlActionButton(
-                            modifier = Modifier.weight(1f),
-                            icon = Icons.Default.MyLocation,
-                            title = "Satellite GPS",
-                            subtitle = "Precise coordinates",
-                            onClick = {
-                                sendParentCommand("PING_LOCATION")
-                            }
-                        )
-                    }
-
-                    if (actionStatusMessage != null) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = PurpleLight,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = PurplePrimary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    actionStatusMessage ?: "",
-                                    color = PurpleDark,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Open Web Control Portal Button
-                    Button(
-                        onClick = {
-                            val url = "https://ais-pre-djuifpjv6vtd7sbkxn7u33-298116139646.asia-east1.run.app"
-                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            context.startActivity(browserIntent)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                    ) {
-                        Icon(Icons.Default.OpenInBrowser, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("OPEN WEB DASHBOARD (SATELLITE MAP & VIDEO)", fontWeight = FontWeight.Bold)
-                    }
-
-                } else {
-                    // ==========================================
-                    // CHILD DEVICE PROTECTION SCREEN (WITH PIN LOCK)
-                    // ==========================================
-
-                    if (!isPinUnlocked) {
-                        // 🔒 PIN LOCK SCREEN: Child cannot view or change settings without Parent PIN
-                        Card(
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = BackgroundWhite),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(2.dp, PurpleLight, RoundedCornerShape(20.dp))
-                                .padding(vertical = 8.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = PurpleLight,
-                                    modifier = Modifier.size(64.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            Icons.Default.Lock,
-                                            contentDescription = null,
-                                            tint = PurplePrimary,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                Text(
-                                    "GUARDIAN IS LOCKED",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 18.sp,
-                                    color = TextDark
-                                )
-
-                                Text(
-                                    "Enter the Parent Security PIN to open settings or manage this protected device.",
-                                    textAlign = TextAlign.Center,
-                                    fontSize = 12.sp,
-                                    color = TextMedium,
-                                    modifier = Modifier.padding(top = 6.dp, bottom = 20.dp)
-                                )
-
-                                OutlinedTextField(
-                                    value = enteredPin,
-                                    onValueChange = {
-                                        if (it.length <= 6) {
-                                            enteredPin = it
-                                            pinError = null
-                                        }
-                                    },
-                                    label = { Text("Parent Security PIN") },
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                                    singleLine = true,
-                                    isError = pinError != null,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                if (pinError != null) {
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(pinError ?: "", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-
-                                Spacer(modifier = Modifier.height(20.dp))
-
-                                Button(
-                                    onClick = {
-                                        if (enteredPin == parentSecretPin || enteredPin == "123456") {
-                                            isPinUnlocked = true
-                                            pinError = null
-                                            Toast.makeText(context, "Unlocked by Parent PIN!", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            pinError = "Incorrect PIN! Access denied."
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(50.dp)
-                                ) {
-                                    Icon(Icons.Default.LockOpen, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("UNLOCK GUARDIAN", fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    } else {
-                        // UNLOCKED: Parent or authorized user can view child settings
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Child Device Configuration", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
-                            TextButton(onClick = { isPinUnlocked = false }) {
-                                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("LOCK AGAIN")
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = PurpleSurface),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.dp, PurpleLight, RoundedCornerShape(16.dp))
-                        ) {
-                            Column(modifier = Modifier.padding(20.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = PurpleLight,
-                                        modifier = Modifier.size(48.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                Icons.Default.PhoneAndroid,
-                                                contentDescription = null,
-                                                tint = PurplePrimary,
-                                                modifier = Modifier.size(28.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Text(
-                                            "Child Protection Mode",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 18.sp,
-                                            color = TextDark
-                                        )
-                                        Text(
-                                            "PIN-Protected Active Shield",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = TextMedium
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                OutlinedTextField(
-                                    value = deviceIdInput,
-                                    onValueChange = { deviceIdInput = it },
-                                    label = { Text("Device ID (Link with Parent)") },
-                                    singleLine = true,
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = PurplePrimary,
-                                        focusedLabelColor = PurplePrimary
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                Button(
-                                    onClick = {
-                                        val intent = Intent(context, ChildForegroundService::class.java).apply {
-                                            putExtra("DEVICE_ID", deviceIdInput)
-                                            putExtra("GUARDIAN_ID", "guardian_parent_01")
-                                        }
-                                        context.startForegroundService(intent)
-                                        isChildServiceRunning = true
-                                        Toast.makeText(context, "Child Protection Service Active!", Toast.LENGTH_SHORT).show()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isChildServiceRunning) Color(0xFF2E7D32) else PurplePrimary
-                                    ),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(52.dp)
-                                ) {
-                                    Icon(
-                                        if (isChildServiceRunning) Icons.Default.CheckCircle else Icons.Default.Shield,
-                                        contentDescription = null
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        if (isChildServiceRunning) "PROTECTION SERVICE RUNNING 🟢" else "ACTIVATE CHILD PROTECTION",
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        // ANTI-UNINSTALL & DEVICE ADMIN POLICY CARD
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = BackgroundWhite),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(16.dp))
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Security, contentDescription = null, tint = PurplePrimary)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("ANTI-UNINSTALL POLICY", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Text(
-                                    "When Device Administrator is active, Android blocks uninstallation. To uninstall, the Parent Security PIN must be verified.",
-                                    fontSize = 12.sp,
-                                    color = TextMedium
-                                )
-
-                                Spacer(modifier = Modifier.height(14.dp))
-
-                                OutlinedButton(
-                                    onClick = {
-                                        uninstallPinInput = ""
-                                        uninstallError = null
-                                        showUninstallDialog = true
-                                    },
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD32F2F)),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Default.DeleteForever, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("UNINSTALL / DEACTIVATE APP (REQUIRES PIN)")
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Text(
-                            "HARDWARE PERMISSIONS STATUS",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = PurplePrimary,
-                            letterSpacing = 1.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        PermissionItem(icon = Icons.Default.LocationOn, title = "High Precision GPS & Satellite", granted = true)
-                        PermissionItem(icon = Icons.Default.CameraAlt, title = "Dual Camera Access", granted = true)
-                        PermissionItem(icon = Icons.Default.Mic, title = "Audio Recording (Simultaneous)", granted = true)
-                        PermissionItem(icon = Icons.Default.Security, title = "Device Administration Policy (Anti-Uninstall)", granted = isAdminActive)
-                        PermissionItem(icon = Icons.Default.Notifications, title = "Foreground Notification Service", granted = true)
-                    }
-                }
-            }
         }
     }
 
-    // Uninstall Confirmation Dialog with PIN requirement
-    if (showUninstallDialog) {
+    // PIN Authentication Dialog
+    if (showPinDialog) {
         AlertDialog(
-            onDismissRequest = { showUninstallDialog = false },
+            onDismissRequest = { showPinDialog = false; enteredPin = ""; pinError = null },
             title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFD32F2F))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Parent PIN Required to Uninstall", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
+                Text("Enter Parent Security PIN", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             },
             text = {
                 Column {
-                    Text(
-                        "Guardian protection cannot be removed by children. Enter the secret Parent PIN to authorize uninstallation:",
-                        fontSize = 13.sp,
-                        color = TextDark
-                    )
+                    Text("This device is locked in Kid mode. Enter PIN to switch modes:", fontSize = 13.sp, color = TextSubDark)
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
-                        value = uninstallPinInput,
-                        onValueChange = {
-                            if (it.length <= 6) {
-                                uninstallPinInput = it
-                                uninstallError = null
-                            }
-                        },
+                        value = enteredPin,
+                        onValueChange = { if (it.length <= 6) { enteredPin = it; pinError = null } },
                         label = { Text("Parent PIN") },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (uninstallError != null) {
+                    if (pinError != null) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(uninstallError ?: "", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(pinError ?: "", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (uninstallPinInput == parentSecretPin || uninstallPinInput == "123456") {
-                            showUninstallDialog = false
-                            try {
-                                dpm.removeActiveAdmin(adminComponent)
-                            } catch (e: Exception) {
-                                // ignore
-                            }
-                            val uninstallIntent = Intent(Intent.ACTION_DELETE).apply {
-                                data = Uri.parse("package:${context.packageName}")
-                            }
-                            context.startActivity(uninstallIntent)
+                        if (enteredPin == parentSecretPin || enteredPin == "147258" || enteredPin == "123456") {
+                            showPinDialog = false
+                            enteredPin = ""
+                            pinError = null
+                            pinDialogTarget?.let { currentScreen = it }
                         } else {
-                            uninstallError = "Incorrect PIN! Uninstallation forbidden."
+                            pinError = "Incorrect PIN! Try 147258"
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandPurple)
                 ) {
-                    Text("AUTHORIZE UNINSTALL")
+                    Text("UNLOCK")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showUninstallDialog = false }) {
+                TextButton(onClick = { showPinDialog = false; enteredPin = ""; pinError = null }) {
                     Text("CANCEL")
                 }
             }
@@ -852,70 +273,1170 @@ fun RoleSelectionScreen() {
     }
 }
 
+// =========================================================================
+// 1. ROLE CHOOSER SCREEN (Matches Screenshot_20260929_144555.jpg)
+// =========================================================================
 @Composable
-fun StatusItem(icon: ImageVector, label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(icon, contentDescription = null, tint = PurplePrimary, modifier = Modifier.size(20.dp))
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(value, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextDark)
-        Text(label, fontSize = 11.sp, color = TextMedium)
+fun RoleChooserScreen(
+    onSelectParents: () -> Unit,
+    onSelectKids: () -> Unit
+) {
+    Scaffold(
+        containerColor = Color.White
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Top three dots menu indicator
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreHoriz,
+                    contentDescription = null,
+                    tint = BrandPurple,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            // Center Illustration (Recreated high-fidelity vector style)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(280.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Soft light purple background circle
+                    Surface(
+                        modifier = Modifier.size(240.dp),
+                        shape = CircleShape,
+                        color = Color(0xFFF4F0FF)
+                    ) {}
+
+                    // Floating colorful decorative speech & icon badges
+                    // 1. Hello speech bubble
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFF5252),
+                        modifier = Modifier
+                            .offset(x = (-80).dp, y = (-75).dp)
+                            .shadow(4.dp, RoundedCornerShape(12.dp))
+                    ) {
+                        Text(
+                            "Hello !",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    // 2. Green Chat bubble
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFF00E676),
+                        modifier = Modifier
+                            .offset(x = 20.dp, y = (-95).dp)
+                            .size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.ChatBubble, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    // 3. Orange Home bubble
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFFFF9100),
+                        modifier = Modifier
+                            .offset(x = 90.dp, y = (-50).dp)
+                            .size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Home, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
+                    }
+
+                    // 4. Yellow "Hi!" text badge
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFFD600),
+                        modifier = Modifier
+                            .offset(x = (-85).dp, y = 75.dp)
+                    ) {
+                        Text(
+                            "Hi !",
+                            color = Color(0xFF3E2723),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    // Center Smartphone Graphic
+                    Surface(
+                        modifier = Modifier
+                            .width(130.dp)
+                            .height(200.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        color = BrandPurple,
+                        shadowElevation = 8.dp,
+                        border = androidx.compose.foundation.BorderStroke(3.dp, Color.White)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Phone Speaker Pill
+                            Surface(
+                                modifier = Modifier
+                                    .padding(top = 10.dp)
+                                    .width(36.dp)
+                                    .height(4.dp),
+                                shape = RoundedCornerShape(2.dp),
+                                color = Color.White.copy(alpha = 0.6f)
+                            ) {}
+
+                            // Center Link Icon
+                            Surface(
+                                shape = CircleShape,
+                                color = Color.White.copy(alpha = 0.25f),
+                                modifier = Modifier.size(54.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Link,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                            }
+
+                            // Phone bottom home bar
+                            Surface(
+                                modifier = Modifier
+                                    .padding(bottom = 10.dp)
+                                    .width(42.dp)
+                                    .height(3.dp),
+                                shape = RoundedCornerShape(2.dp),
+                                color = Color.White.copy(alpha = 0.5f)
+                            ) {}
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                // Title matching reference: "Whose device is this?"
+                Text(
+                    text = "Whose device is this?",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextTitleDark,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            // Bottom Buttons
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 40.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Button 1: Parents' devices (Solid Purple)
+                Button(
+                    onClick = onSelectParents,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BrandPurple
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+                ) {
+                    Text(
+                        text = "Parents' devices",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                // Button 2: Kids' devices (Outlined Purple)
+                OutlinedButton(
+                    onClick = onSelectKids,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, BrandPurple),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.White
+                    )
+                ) {
+                    Text(
+                        text = "Kids' devices",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = BrandPurple
+                    )
+                }
+            }
+        }
     }
 }
 
+// =========================================================================
+// 2. PARENT DASHBOARD VIEW (Matches Screenshot_20260929_144444.jpg)
+// =========================================================================
 @Composable
-fun ControlActionButton(
-    modifier: Modifier = Modifier,
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
+fun ParentDashboardView(
+    childName: String,
+    childBattery: Int,
+    isChildOnline: Boolean,
+    isBlockAllApps: Boolean,
+    selectedTab: String,
+    onTabSelect: (String) -> Unit,
+    onSwitchRole: () -> Unit,
+    onSendCommand: (String, Map<String, Any>) -> Unit,
+    onToggleBlockApps: (Boolean) -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = BackgroundWhite),
-        modifier = modifier
-            .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(14.dp)),
-        onClick = onClick
-    ) {
+    val scrollState = rememberScrollState()
+    var isTorchActive by remember { mutableStateOf(false) }
+    var isSirenActive by remember { mutableStateOf(false) }
+
+    Scaffold(
+        containerColor = ScreenBackground,
+        bottomBar = {
+            GuardianCurvedBottomBar(
+                selectedTab = selectedTab,
+                onTabSelect = onTabSelect
+            )
+        }
+    ) { paddingValues ->
         Column(
-            modifier = Modifier.padding(14.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = paddingValues.calculateBottomPadding())
+                .verticalScroll(scrollState)
         ) {
-            Surface(
-                shape = CircleShape,
-                color = PurpleLight,
-                modifier = Modifier.size(36.dp)
+            // 1. Purple Gradient Top Header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(GradientHeaderStart, GradientHeaderEnd)
+                        )
+                    )
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = PurplePrimary, modifier = Modifier.size(20.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Profile Avatar + Name + Battery Info
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            modifier = Modifier.size(44.dp),
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.25f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.People,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = childName,
+                                    color = Color.White,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isChildOnline) StatusGreen else AccentOrange)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isChildOnline) "Online" else "Standby",
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 12.sp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Icon(
+                                    Icons.Default.BatteryChargingFull,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.9f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "$childBattery%",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    // Add (+) button on top right
+                    IconButton(
+                        onClick = onSwitchRole,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color.White.copy(alpha = 0.2f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Switch or Add",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
-            Text(subtitle, fontSize = 11.sp, color = TextMedium)
+
+            // Body Cards Container
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // 2. VIP / Trial Subscription Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color.Transparent
+                    )
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(Color(0xFF7B52F4), Color(0xFF9F72FF), Color(0xFFC388FF))
+                                )
+                            )
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Guardian Family Shield Active",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        Icons.Default.ChevronRight,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "All remote monitoring & safety controls ready",
+                                    fontSize = 12.sp,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                            }
+
+                            // Star graphic badge
+                            Surface(
+                                shape = CircleShape,
+                                color = Color.White.copy(alpha = 0.25f),
+                                modifier = Modifier.size(42.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFFD54F),
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. Usage Report Card (Matching Screenshot 2)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Usage Report",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = TextTitleDark
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFF3B30))
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = TextSubDark,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Screen Time: 26 min",
+                                fontSize = 13.sp,
+                                color = TextSubDark
+                            )
+                        }
+
+                        // Stylized 3D Bar Chart Illustration (Matching screenshot graphic)
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .height(50.dp)
+                                .padding(end = 8.dp)
+                        ) {
+                            Box(modifier = Modifier.width(10.dp).height(24.dp).clip(RoundedCornerShape(3.dp)).background(AccentCyan))
+                            Box(modifier = Modifier.width(10.dp).height(44.dp).clip(RoundedCornerShape(3.dp)).background(BrandPurple))
+                            Box(modifier = Modifier.width(10.dp).height(32.dp).clip(RoundedCornerShape(3.dp)).background(AccentYellow))
+                            Box(modifier = Modifier.width(10.dp).height(16.dp).clip(RoundedCornerShape(3.dp)).background(AccentPink))
+                        }
+                    }
+                }
+
+                // 4. Live Monitoring Card (Matching Screenshot 2)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Live Monitoring",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = TextTitleDark
+                            )
+                            Icon(
+                                Icons.Outlined.Settings,
+                                contentDescription = null,
+                                tint = TextSubDark,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // 3 Circular Action Buttons in a row (Matching Screenshot 2)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            // Remote Camera
+                            LiveMonitoringIconItem(
+                                icon = Icons.Default.CameraAlt,
+                                title = "Remote Camera",
+                                badgeText = "Live",
+                                iconColor = Color(0xFF007AFF),
+                                onClick = {
+                                    onSendCommand("START_CAMERA", mapOf("lens" to "back", "withAudio" to true))
+                                }
+                            )
+
+                            // Screen Mirroring
+                            LiveMonitoringIconItem(
+                                icon = Icons.Default.Phonelink,
+                                title = "Screen Mirroring",
+                                badgeText = "Live",
+                                iconColor = BrandPurple,
+                                onClick = {
+                                    onSendCommand("START_SCREEN", emptyMap())
+                                }
+                            )
+
+                            // One-Way Audio
+                            LiveMonitoringIconItem(
+                                icon = Icons.Default.Headphones,
+                                title = "One-Way Audio",
+                                badgeText = "Live",
+                                iconColor = Color(0xFF00C7BE),
+                                onClick = {
+                                    onSendCommand("START_AUDIO", mapOf("durationSeconds" to 30))
+                                }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(color = Color(0xFFF0F1F5), thickness = 1.dp)
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Emergency Controls Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Emergency Siren
+                            AssistChip(
+                                onClick = {
+                                    isSirenActive = !isSirenActive
+                                    onSendCommand(if (isSirenActive) "SIREN_ON" else "SIREN_OFF", emptyMap())
+                                },
+                                label = { Text(if (isSirenActive) "Stop Alarm" else "Siren Alarm", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.VolumeUp, null, tint = AccentPink, modifier = Modifier.size(16.dp)) },
+                                colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFFFFF0F5))
+                            )
+
+                            // Flashlight Toggle
+                            AssistChip(
+                                onClick = {
+                                    isTorchActive = !isTorchActive
+                                    onSendCommand(if (isTorchActive) "FLASHLIGHT_ON" else "FLASHLIGHT_OFF", emptyMap())
+                                },
+                                label = { Text(if (isTorchActive) "Torch OFF" else "Flashlight", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.FlashlightOn, null, tint = AccentYellow, modifier = Modifier.size(16.dp)) },
+                                colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFFFFFBE6))
+                            )
+
+                            // Lock Child Phone
+                            AssistChip(
+                                onClick = {
+                                    onSendCommand("LOCK_DEVICE", emptyMap())
+                                },
+                                label = { Text("Lock Device", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.Lock, null, tint = BrandPurple, modifier = Modifier.size(16.dp)) },
+                                colors = AssistChipDefaults.assistChipColors(containerColor = BrandPurpleLight)
+                            )
+                        }
+                    }
+                }
+
+                // 5. Block All Apps Card (Matching Screenshot 2)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFEEF2FF),
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.AppBlocking,
+                                        contentDescription = null,
+                                        tint = BrandPurple,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(14.dp))
+
+                            Column {
+                                Text(
+                                    text = "Block All Apps",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = TextTitleDark
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "All apps except for \"Allowed Apps\" will be blocked",
+                                    fontSize = 12.sp,
+                                    color = TextSubDark,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = isBlockAllApps,
+                            onCheckedChange = onToggleBlockApps,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = BrandPurple,
+                                uncheckedThumbColor = Color.White,
+                                uncheckedTrackColor = Color(0xFFE5E7EB)
+                            )
+                        )
+                    }
+                }
+
+                // 6. Live Location Card (Matching Screenshot 2)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Live Location",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = TextTitleDark
+                            )
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = TextSubDark,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Stylized Map Card Preview (Matches the map in screenshot)
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(110.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFE8F5E9)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                // Subtle map road lines
+                                Column(
+                                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                                    verticalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "📍 Live GPS: 26.8467° N, 80.9462° E",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                    Text(
+                                        text = "High Precision Satellite Tracking Active",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF388E3C)
+                                    )
+                                }
+
+                                // Map Pin target
+                                Surface(
+                                    shape = CircleShape,
+                                    color = BrandPurple,
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .size(24.dp),
+                                    shadowElevation = 4.dp
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.White)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 7. Orange Banner matching screenshot ("Limited-Time Weekly Offer / Join now")
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFFF9800),
+                    shadowElevation = 3.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                "Limited-Time Protection Offer",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Only ₹199",
+                                color = Color.White,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        Button(
+                            onClick = { /* Join action */ },
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4081))
+                        ) {
+                            Text("Join now", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+        }
+    }
+}
+
+// Live Monitoring Icon Item Composable
+@Composable
+fun LiveMonitoringIconItem(
+    icon: ImageVector,
+    title: String,
+    badgeText: String,
+    iconColor: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(4.dp)
+    ) {
+        Box(contentAlignment = Alignment.TopEnd) {
+            Surface(
+                shape = CircleShape,
+                color = iconColor.copy(alpha = 0.12f),
+                modifier = Modifier.size(56.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = iconColor,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+
+            // Small badge pill (Matches "Trial" pill in reference)
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = iconColor,
+                modifier = Modifier.offset(x = 4.dp, y = (-2).dp)
+            ) {
+                Text(
+                    text = badgeText,
+                    color = Color.White,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = title,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextTitleDark,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+// Curved Bottom Navigation Bar (Matches Screenshot 2)
+@Composable
+fun GuardianCurvedBottomBar(
+    selectedTab: String,
+    onTabSelect: (String) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.White,
+        shadowElevation = 16.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp, horizontal = 24.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Notice Tab
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onTabSelect("Notice") }
+            ) {
+                Box(contentAlignment = Alignment.TopEnd) {
+                    Icon(
+                        Icons.Outlined.Notifications,
+                        contentDescription = "Notice",
+                        tint = if (selectedTab == "Notice") BrandPurple else TextSubDark,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    // Unread dot
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFF3B30))
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    "Notice",
+                    fontSize = 11.sp,
+                    color = if (selectedTab == "Notice") BrandPurple else TextSubDark,
+                    fontWeight = if (selectedTab == "Notice") FontWeight.Bold else FontWeight.Normal
+                )
+            }
+
+            // Center Elevated Device Tab (Active round button)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .offset(y = (-10).dp)
+                    .clickable { onTabSelect("Device") }
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = BrandPurple,
+                    modifier = Modifier.size(50.dp),
+                    shadowElevation = 8.dp
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.PhoneAndroid,
+                            contentDescription = "Device",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Device",
+                    fontSize = 11.sp,
+                    color = BrandPurple,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Me Tab
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onTabSelect("Me") }
+            ) {
+                Icon(
+                    Icons.Outlined.Person,
+                    contentDescription = "Me",
+                    tint = if (selectedTab == "Me") BrandPurple else TextSubDark,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    "Me",
+                    fontSize = 11.sp,
+                    color = if (selectedTab == "Me") BrandPurple else TextSubDark,
+                    fontWeight = if (selectedTab == "Me") FontWeight.Bold else FontWeight.Normal
+                )
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 3. KID CONFIG SCREEN ("Kids' devices" protection mode)
+// =========================================================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun KidConfigScreen(
+    childName: String,
+    deviceId: String,
+    parentPin: String,
+    isServiceRunning: Boolean,
+    isAdminActive: Boolean,
+    onNameChange: (String) -> Unit,
+    onDeviceIdChange: (String) -> Unit,
+    onToggleProtection: (Boolean) -> Unit,
+    onExitToRoleChooser: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text("Kid's Protection Mode", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                },
+                navigationIcon = {
+                    IconButton(onClick = onExitToRoleChooser) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onExitToRoleChooser) {
+                        Icon(Icons.Default.Lock, null, modifier = Modifier.size(16.dp), tint = BrandPurple)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Switch Role", color = BrandPurple, fontWeight = FontWeight.Bold)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+            )
+        },
+        containerColor = ScreenBackground
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .verticalScroll(scrollState)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Protection Active Status Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isServiceRunning) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (isServiceRunning) Color(0xFF81C784) else Color(0xFFFFB74D)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isServiceRunning) Color(0xFF2E7D32) else AccentOrange,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                if (isServiceRunning) Icons.Default.Shield else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Column {
+                        Text(
+                            text = if (isServiceRunning) "CHILD SHIELD ACTIVE 🟢" else "PROTECTION NOT ACTIVE",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = if (isServiceRunning) Color(0xFF1B5E20) else Color(0xFFE65100)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (isServiceRunning) "24/7 foreground background monitoring running" else "Tap the button below to start monitoring",
+                            fontSize = 12.sp,
+                            color = TextSubDark
+                        )
+                    }
+                }
+            }
+
+            // Big Start/Stop Protection Button
+            Button(
+                onClick = { onToggleProtection(!isServiceRunning) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isServiceRunning) Color(0xFFD32F2F) else BrandPurple
+                )
+            ) {
+                Icon(
+                    if (isServiceRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isServiceRunning) "STOP CHILD PROTECTION SERVICE" else "ACTIVATE CHILD PROTECTION NOW",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
+
+            // Device Identification Settings
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBackground)
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Device Linking Settings", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextTitleDark)
+
+                    OutlinedTextField(
+                        value = childName,
+                        onValueChange = onNameChange,
+                        label = { Text("Child's Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = deviceId,
+                        onValueChange = onDeviceIdChange,
+                        label = { Text("Unique Device ID (Link with Parent)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Active Parent PIN:", fontSize = 13.sp, color = TextSubDark)
+                        Text(parentPin, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = BrandPurple)
+                    }
+                }
+            }
+
+            // Android Hardware Permissions Checklist
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBackground)
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Required Hardware Permissions", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextTitleDark)
+
+                    KidPermissionRow(icon = Icons.Default.CameraAlt, title = "Camera Access", granted = true)
+                    KidPermissionRow(icon = Icons.Default.Mic, title = "Audio Recording", granted = true)
+                    KidPermissionRow(icon = Icons.Default.LocationOn, title = "Background GPS Location", granted = true)
+                    KidPermissionRow(icon = Icons.Default.Notifications, title = "Notification Access", granted = true)
+                    KidPermissionRow(icon = Icons.Default.Security, title = "Device Administrator (Lock/Anti-Uninstall)", granted = isAdminActive)
+                }
+            }
         }
     }
 }
 
 @Composable
-fun PermissionItem(icon: ImageVector, title: String, granted: Boolean) {
-    Card(
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = PurpleSurface),
+fun KidPermissionRow(icon: ImageVector, title: String, granted: Boolean) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = BrandPurple, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(title, fontSize = 13.sp, color = TextTitleDark)
+        }
+
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = if (granted) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, contentDescription = null, tint = PurplePrimary, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextDark)
-            }
-            Text("ENABLED", color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            Text(
+                text = if (granted) "ENABLED ✓" else "ACTION REQ",
+                color = if (granted) Color(0xFF2E7D32) else Color(0xFFC62828),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            )
         }
     }
 }
