@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GRADLE_OPTS: "-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
@@ -41,7 +44,7 @@ jobs:
 
       - name: Build Debug APK
         run: |
-          gradle :app:assembleDebug --stacktrace --no-daemon
+          gradle :app:assembleDebug --stacktrace --no-daemon -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
 
       - name: Verify APK generated
         id: verify-apk
