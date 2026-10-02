@@ -1,0 +1,6 @@
+{
+  "name": "Guardian",
+  "description": "Guardian Parental Control - Real-time device monitoring, live location, remote camera, audio streaming, screen mirroring, and connection management.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation", "display-capture"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

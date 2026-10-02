@@ -1,0 +1,320 @@
+name: Build and Publish Debug APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Verify Java environment
+        run: |
+          echo "=== Java Environment Check ==="
+          java -version
+          echo "JAVA_HOME: $JAVA_HOME"
+          JAVA_MAJOR=$(java -version 2>&1 | head -n 1 | awk -F '"' '{print $2}' | awk -F '.' '{if ($1 == "1") print $2; else print $1}')
+          echo "Detected Java Major Version: $JAVA_MAJOR"
+          if [ -z "$JAVA_MAJOR" ]; then
+            echo "ERROR: Could not detect Java version."
+            exit 1
+          fi
+          if [ "$JAVA_MAJOR" -lt 17 ]; then
+            echo "ERROR: Java 17 or higher is required. Found version: $JAVA_MAJOR"
+            exit 1
+          fi
+          echo "Java 17 environment verified successfully."
+
+      - name: Verify Android Gradle project structure
+        run: |
+          echo "=== Checking Android Project Structure ==="
+          if [ ! -f "settings.gradle.kts" ] && [ ! -f "settings.gradle" ]; then
+            echo "::error:: settings.gradle(.kts) not found in repository root!"
+            echo "The Android project files are currently only defined inside src/services/androidProjectFiles.ts."
+            echo "Actual Android project files (settings.gradle.kts, app/build.gradle.kts, etc.) must be committed to the repository before Gradle can build."
+            exit 1
+          fi
+          if [ ! -d "app" ] || [ ! -f "app/build.gradle.kts" ]; then
+            echo "::error:: Android 'app' module not found!"
+            exit 1
+          fi
+          echo "Android Gradle project files verified successfully."
+
+      - name: Set up Gradle 8.7 (Compatible with AGP 8.3.0)
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      - name: Create temporary debug keystore
+        run: |
+          if [ -f "./debug.keystore" ]; then
+            echo "debug.keystore already exists."
+          else
+            echo "Generating temporary debug keystore..."
+            keytool -genkey -v \
+              -keystore ./debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          if [ ! -f "./debug.keystore" ]; then
+            echo "ERROR: Failed to create ./debug.keystore"
+            exit 1
+          fi
+          echo "Debug keystore ready."
+
+      - name: Configure AndroidX in gradle.properties
+        run: |
+          echo "=== Ensuring gradle.properties has AndroidX enabled ==="
+          touch gradle.properties
+          if ! grep -q "android.useAndroidX" gradle.properties; then
+            echo "android.useAndroidX=true" >> gradle.properties
+          fi
+          if ! grep -q "android.enableJetifier" gradle.properties; then
+            echo "android.enableJetifier=true" >> gradle.properties
+          fi
+          if ! grep -q "org.gradle.jvmargs" gradle.properties; then
+            echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          fi
+          echo "=== gradle.properties content ==="
+          cat gradle.properties
+
+      - name: Ensure google-services.json exists
+        run: |
+          echo "=== Ensuring app/google-services.json exists ==="
+          mkdir -p app
+          if [ ! -f "app/google-services.json" ]; then
+            echo "Generating app/google-services.json for Google Services Plugin..."
+            cat << 'EOF' > app/google-services.json
+{
+  "project_info": {
+    "project_number": "529929535607",
+    "project_id": "astral-subject-wlkcn",
+    "storage_bucket": "astral-subject-wlkcn.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:529929535607:web:57888bc68453cbddc60672",
+        "android_client_info": {
+          "package_name": "com.guardian.parentalcontrol"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "529929535607-1ea1pmlupptj8rtm80ameuf4gas50462.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCuPC2t-dgM07we668v33mnql70QXDQHVM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+EOF
+          fi
+          echo "app/google-services.json is verified and ready."
+
+      - name: Ensure Android launcher icons and resources exist
+        run: |
+          echo "=== Ensuring launcher icons and resources exist ==="
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+
+          if [ ! -f "app/src/main/res/drawable/ic_launcher_background.xml" ]; then
+            echo "Creating ic_launcher_background.xml..."
+            cat << 'EOF' > app/src/main/res/drawable/ic_launcher_background.xml
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#6750A4"
+        android:pathData="M0,0h108v108h-108z" />
+</vector>
+EOF
+          fi
+
+          if [ ! -f "app/src/main/res/drawable/ic_launcher_foreground.xml" ]; then
+            echo "Creating ic_launcher_foreground.xml..."
+            cat << 'EOF' > app/src/main/res/drawable/ic_launcher_foreground.xml
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,20L28,32v24c0,16.5 11,31.8 26,36c15,-4.2 26,-19.5 26,-36V32L54,20z M50,68l-14,-14l4.2,-4.2l9.8,9.8l19.8,-19.8l4.2,4.2L50,68z" />
+</vector>
+EOF
+          fi
+
+          if [ ! -f "app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml" ]; then
+            echo "Creating ic_launcher.xml in mipmap-anydpi-v26..."
+            cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+EOF
+          fi
+
+          if [ ! -f "app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml" ]; then
+            echo "Creating ic_launcher_round.xml in mipmap-anydpi-v26..."
+            cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+EOF
+          fi
+
+          if [ -f "app/src/main/AndroidManifest.xml" ]; then
+            sed -i '/package="com.guardian.parentalcontrol"/d' app/src/main/AndroidManifest.xml || true
+          fi
+          echo "Resources and icons verified."
+
+      - name: Build debug APK
+        run: |
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify debug APK
+        id: verify-apk
+        run: |
+          EXPECTED_APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$EXPECTED_APK" ]; then
+            echo "ERROR: Expected debug APK not found at $EXPECTED_APK"
+            echo "Searching in app/build/outputs/apk:"
+            find app/build/outputs/apk -name "*.apk" || true
+            exit 1
+          fi
+
+          if [ ! -s "$EXPECTED_APK" ]; then
+            echo "ERROR: Generated APK is empty (0 bytes)."
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "$EXPECTED_APK" 2>/dev/null || stat -f%z "$EXPECTED_APK")
+          echo "Successfully verified APK: $EXPECTED_APK (Size: $FILE_SIZE bytes)"
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Prepare APK release asset
+        id: prepare-asset
+        run: |
+          TEMP_RELEASE_DIR=$(mktemp -d -t apk-release-XXXXXX)
+          REPO_CLEAN=$(echo "${{ github.repository }}" | tr '/' '-' | tr -cd '[:alnum:]-_')
+          ASSET_FILENAME="${REPO_CLEAN}-debug-build-${{ github.run_number }}.apk"
+          ASSET_PATH="${TEMP_RELEASE_DIR}/${ASSET_FILENAME}"
+          cp "app/build/outputs/apk/debug/app-debug.apk" "$ASSET_PATH"
+
+          if [ ! -s "$ASSET_PATH" ]; then
+            echo "ERROR: Prepared release asset is missing or empty."
+            exit 1
+          fi
+
+          echo "asset_path=${ASSET_PATH}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${ASSET_FILENAME}" >> "$GITHUB_OUTPUT"
+          echo "Release asset prepared: ${ASSET_PATH}"
+
+      - name: Publish APK to GitHub Releases
+        id: create-release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh --version
+          TAG_NAME="debug-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
+          RELEASE_TITLE="Debug APK Build #${{ github.run_number }}"
+          ASSET_PATH="${{ steps.prepare-asset.outputs.asset_path }}"
+          ASSET_NAME="${{ steps.prepare-asset.outputs.asset_name }}"
+
+          if [ ! -f "$ASSET_PATH" ] || [ ! -s "$ASSET_PATH" ]; then
+            echo "ERROR: Cannot publish release, APK asset is missing or empty."
+            exit 1
+          fi
+
+          NOTES=$(cat <<EOF
+          ### Automated Android Debug APK Build
+
+          - **Build Run**: #${{ github.run_number }} (Attempt ${{ github.run_attempt }})
+          - **Commit SHA**: \`${{ github.sha }}\`
+          - **Artifact**: \`${ASSET_NAME}\`
+          - **Type**: Android Debug Build (signed with standard temporary debug keystore)
+          - **Notice**: Intended for testing and evaluation on Android devices.
+          EOF
+          )
+
+          gh release create "$TAG_NAME" \
+            "$ASSET_PATH#$ASSET_NAME" \
+            --target "${{ github.sha }}" \
+            --title "$RELEASE_TITLE" \
+            --notes "$NOTES" \
+            --latest
+
+          echo "release_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Report APK download result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "=== APK Build & Distribution Summary ==="
+          RELEASE_STATUS="${{ steps.create-release.outcome }}"
+          TAG_NAME="debug-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
+          ASSET_NAME="${{ steps.prepare-asset.outputs.asset_name }}"
+
+          echo "### 📱 Android Debug APK Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Build Outcome**: Success" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Actions Artifact Name**: \`app-debug-apk\` (Always available in Workflow run details)" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$RELEASE_STATUS" = "success" ]; then
+            RELEASE_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG_NAME}"
+            echo "GitHub Release published successfully: $RELEASE_URL"
+            echo "- **Release Tag**: \`${TAG_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Direct Download Asset**: \`${ASSET_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Direct GitHub Release Page**: [Download APK](${RELEASE_URL})" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The debug APK can be downloaded directly to your phone from the release Assets section." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning:: GitHub Release creation did not complete or was skipped. Actions artifact remains available."
+            echo "- **GitHub Release**: Not published (Permissions or runner environment limit)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Backup Download**: Download \`app-debug-apk\` directly from the **Artifacts** section at the bottom of this Actions run page." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Guardian</string>
+    <string name="device_admin_label">Guardian Device Administrator</string>
+    <string name="device_admin_description">Enables real-time parental protection, application management, and screen time policies.</string>
+</resources>

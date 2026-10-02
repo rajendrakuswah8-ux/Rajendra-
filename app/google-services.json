@@ -1,0 +1,34 @@
+{
+  "project_info": {
+    "project_number": "529929535607",
+    "project_id": "astral-subject-wlkcn",
+    "storage_bucket": "astral-subject-wlkcn.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:529929535607:web:57888bc68453cbddc60672",
+        "android_client_info": {
+          "package_name": "com.guardian.parentalcontrol"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "529929535607-1ea1pmlupptj8rtm80ameuf4gas50462.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCuPC2t-dgM07we668v33mnql70QXDQHVM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

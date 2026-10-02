@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_primary">#6750A4</color>
+    <color name="purple_on_primary">#FFFFFF</color>
+    <color name="purple_primary_container">#EADDFF</color>
+    <color name="purple_on_primary_container">#21005D</color>
+    <color name="background_light">#FEF7FF</color>
+    <color name="surface_light">#FEF7FF</color>
+    <color name="online_green">#10B981</color>
+    <color name="offline_red">#EF4444</color>
+</resources>
