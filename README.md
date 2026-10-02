@@ -29,3 +29,5 @@ GUARDIAN is a production-grade, two-mode Android parental control application en
 - Android SDK 26 (Android 8.0 Oreo) up to Android SDK 34 (Android 14)
 - Android Studio Hedgehog, Iguana, Jellyfish, or Ladybug
 - JDK 17
+-e 
+<!-- Build Trigger: Fri Oct  2 12:40:41 PM UTC 2026 -->
