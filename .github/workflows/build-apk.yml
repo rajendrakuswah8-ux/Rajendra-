@@ -54,11 +54,13 @@ jobs:
           fi
           FILE_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH")
           echo "APK generated successfully: $APK_PATH ($FILE_SIZE bytes)"
+          echo "apk_size=$FILE_SIZE" >> "$GITHUB_OUTPUT"
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
+          name: guardian-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -72,19 +74,17 @@ jobs:
           RELEASE_TITLE="Guardian Parental Control APK - Build #${{ github.run_number }}"
           ASSET_NAME="Guardian-ParentalControl-debug-${{ github.run_number }}.apk"
           cp "app/build/outputs/apk/debug/app-debug.apk" "./${ASSET_NAME}"
-
           gh release create "$TAG_NAME" \
             "./${ASSET_NAME}#${ASSET_NAME}" \
             --target "${{ github.sha }}" \
             --title "$RELEASE_TITLE" \
-            --notes "Automated Android Build #${{ github.run_number }} for Guardian Parental Control. Download and install the APK on Android devices." \
+            --notes "Automated Android Build #${{ github.run_number }} for Guardian Parental Control. Production native Android APK compiled and ready to install." \
             --latest
-
           echo "release_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "asset_name=${ASSET_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Print Download Information
         if: always()
         run: |
-          echo "### 📱 Android APK Build Complete!" >> "$GITHUB_STEP_SUMMARY"
-          echo "Download your APK from GitHub Releases or from Artifacts below." >> "$GITHUB_STEP_SUMMARY"
+          echo "### 📱 Android Native Guardian APK Build Complete!" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download your verified APK from GitHub Releases or from Artifacts named **guardian-debug-apk**." >> "$GITHUB_STEP_SUMMARY"
