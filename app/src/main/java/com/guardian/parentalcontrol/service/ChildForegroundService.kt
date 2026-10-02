@@ -15,6 +15,12 @@ import com.guardian.parentalcontrol.data.CommandResponse
 import com.guardian.parentalcontrol.data.DeviceCommand
 import com.guardian.parentalcontrol.hardware.LocationManager
 import com.guardian.parentalcontrol.hardware.TorchManager
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import com.guardian.parentalcontrol.service.GuardianDeviceAdminReceiver
 import kotlinx.coroutines.*
 
 class ChildForegroundService : Service() {
@@ -29,6 +35,7 @@ class ChildForegroundService : Service() {
     private var guardianId: String = ""
     private var lastStopCameraTimestamp: Long = 0L
     private var pendingCameraJob: Job? = null
+    private var mediaPlayer: MediaPlayer? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -126,7 +133,58 @@ class ChildForegroundService : Service() {
                 responseStatus = "OK"
                 responseMessage = "PONG from Android Child Device"
             }
-            "FLASHLIGHT_ON" -> {
+            "SIREN_ON" -> {
+                try {
+                    val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    mediaPlayer?.stop()
+                    mediaPlayer?.release()
+                    mediaPlayer = MediaPlayer().apply {
+                        setDataSource(this@ChildForegroundService, alertUri)
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_ALARM)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                        )
+                        isLooping = true
+                        prepare()
+                        start()
+                    }
+                    responseMessage = "Emergency siren sounding"
+                } catch (e: Exception) {
+                    responseStatus = "ERROR"
+                    responseMessage = "Siren error: ${e.message}"
+                }
+            }
+            "SIREN_OFF" -> {
+                try {
+                    mediaPlayer?.stop()
+                    mediaPlayer?.release()
+                    mediaPlayer = null
+                    responseMessage = "Emergency siren stopped"
+                } catch (e: Exception) {
+                    responseStatus = "ERROR"
+                    responseMessage = "Failed to stop siren: ${e.message}"
+                }
+            }
+            "LOCK_DEVICE" -> {
+                try {
+                    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val adminComponent = ComponentName(this@ChildForegroundService, GuardianDeviceAdminReceiver::class.java)
+                    if (dpm.isAdminActive(adminComponent)) {
+                        dpm.lockNow()
+                        responseMessage = "Child device locked by parent"
+                    } else {
+                        responseStatus = "ERROR"
+                        responseMessage = "Device Admin permission not enabled on child device"
+                    }
+                } catch (e: Exception) {
+                    responseStatus = "ERROR"
+                    responseMessage = "Lock failed: ${e.message}"
+                }
+            }
+            "FLASHLIGHT_ON", "TORCH_ON" -> {
                 val res = torchManager.setTorch(true)
                 if (res.isSuccess) {
                     firestore.collection("childDevices").document(deviceId)
@@ -137,7 +195,7 @@ class ChildForegroundService : Service() {
                     responseMessage = res.exceptionOrNull()?.message ?: "Flashlight unsupported"
                 }
             }
-            "FLASHLIGHT_OFF" -> {
+            "FLASHLIGHT_OFF", "TORCH_OFF" -> {
                 torchManager.setTorch(false)
                 firestore.collection("childDevices").document(deviceId)
                     .update("flashlightState", "OFF")
@@ -217,7 +275,7 @@ class ChildForegroundService : Service() {
                 stopService(screenIntent)
                 responseMessage = "Screen mirroring stopped"
             }
-            "REFRESH_LOCATION" -> {
+            "REFRESH_LOCATION", "PING_LOCATION" -> {
                 val loc = locationManager.getCurrentLocation()
                 firestore.collection("childDevices").document(deviceId)
                     .update("location", loc)
@@ -244,6 +302,11 @@ class ChildForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+        } catch (e: Exception) {}
         super.onDestroy()
         commandListener?.remove()
         serviceScope.cancel()
